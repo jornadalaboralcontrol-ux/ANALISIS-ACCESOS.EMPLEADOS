@@ -1,0 +1,9 @@
+{
+  "name": "zkbio-dashboard-accesos",
+  "version": "1.0.0",
+  "description": "Dashboard de analisis de accesos de colaboradores (ventana +-10 min) alimentado por la API de ZKBio CVSecurity",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  }
+}
