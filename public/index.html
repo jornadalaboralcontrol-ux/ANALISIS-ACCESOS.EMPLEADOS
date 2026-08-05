@@ -11,10 +11,22 @@
   ::-webkit-scrollbar { height: 8px; width: 8px; }
   ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
   .heat-cell { min-width: 34px; text-align: center; font-size: 11px; }
-  select[multiple] { min-height: 84px; }
   .tab-btn.active { background: #1e293b; color: #fff; }
   .chip { display:inline-flex; align-items:center; gap:4px; background:#e2e8f0; border-radius:9999px; padding:2px 8px; font-size:11px; margin:2px; }
   .chip button { color:#64748b; font-weight:bold; }
+
+  /* ---- multi-select con checklist ---- */
+  .ms { position: relative; }
+  .ms-btn { width:100%; text-align:left; border:1px solid #cbd5e1; border-radius:0.5rem; padding:0.5rem 0.75rem; font-size:0.875rem; background:#fff; display:flex; justify-content:space-between; align-items:center; }
+  .ms-btn:hover { border-color:#94a3b8; }
+  .ms-badge { background:#1e293b; color:#fff; border-radius:9999px; font-size:10px; padding:1px 7px; margin-left:6px; }
+  .ms-panel { position:absolute; z-index:20; top:calc(100% + 4px); left:0; width:280px; max-width:80vw; background:#fff; border:1px solid #cbd5e1; border-radius:0.5rem; box-shadow:0 8px 20px rgba(0,0,0,0.12); padding:0.5rem; }
+  .ms-panel input[type=text] { width:100%; border:1px solid #e2e8f0; border-radius:0.375rem; padding:0.35rem 0.5rem; font-size:0.8rem; margin-bottom:0.4rem; }
+  .ms-options { max-height:220px; overflow-y:auto; }
+  .ms-option { display:flex; align-items:center; gap:6px; padding:3px 4px; font-size:0.8rem; border-radius:4px; cursor:pointer; }
+  .ms-option:hover { background:#f1f5f9; }
+  .ms-actions { display:flex; justify-content:space-between; margin-top:0.4rem; font-size:11px; }
+  .ms-actions button { color:#2563eb; }
 </style>
 </head>
 <body class="bg-slate-100 text-slate-800">
@@ -37,14 +49,14 @@
 
     <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
       <div>
-        <label class="block text-xs font-semibold text-slate-500 mb-1">Colaborador (busca por ID o nombre)</label>
+        <label class="block text-xs font-semibold text-slate-500 mb-1">Colaborador (ID o nombre — Enter para agregar)</label>
         <input id="buscarColaborador" placeholder="ej. 907291 o Narciso" class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm" autocomplete="off" />
         <div id="sugerencias" class="relative"></div>
         <div id="chipsColaboradores" class="mt-1"></div>
       </div>
       <div>
-        <label class="block text-xs font-semibold text-slate-500 mb-1">Departamento</label>
-        <select id="fDepto" multiple class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"></select>
+        <label class="block text-xs font-semibold text-slate-500 mb-1">Departamento / Sede</label>
+        <div id="msDepto" class="ms"></div>
       </div>
       <div>
         <label class="block text-xs font-semibold text-slate-500 mb-1">Desde</label>
@@ -56,7 +68,7 @@
       </div>
     </div>
 
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-3 flex-wrap">
       <button id="btnActualizar" class="bg-slate-800 hover:bg-slate-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition">
         Actualizar
       </button>
@@ -65,7 +77,7 @@
     </div>
     <p class="text-xs text-slate-400 mt-2">
       Si eliges colaborador(es) o departamento, la consulta es dirigida (rápida, cualquier rango de fechas).
-      Sin filtro de colaborador/departamento, se escanea todo el sistema — usa rangos cortos (1-3 días).
+      Sin ninguno de los dos, se escanea todo el sistema — usa rangos cortos (1-3 días).
     </p>
   </div>
 
@@ -80,28 +92,16 @@
           <button id="btnLimpiarRefinar" class="text-xs text-blue-600 hover:underline">Limpiar</button>
         </div>
 
-        <label class="block text-xs font-semibold text-slate-500 mb-1">Sede / Área</label>
-        <select id="fArea" multiple class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm mb-3"></select>
-
-        <label class="block text-xs font-semibold text-slate-500 mb-1">Dispositivo</label>
-        <select id="fDispositivo" multiple class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm mb-3"></select>
-
-        <label class="block text-xs font-semibold text-slate-500 mb-1">Lector</label>
-        <select id="fLector" multiple class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm mb-3"></select>
-
-        <label class="block text-xs font-semibold text-slate-500 mb-1">Modo de verificación</label>
-        <select id="fModo" multiple class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm mb-3"></select>
-
-        <label class="block text-xs font-semibold text-slate-500 mb-1">Tipo de evento</label>
-        <select id="fTipoEvento" multiple class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm mb-3"></select>
-
-        <label class="block text-xs font-semibold text-slate-500 mb-1">Nivel de evento</label>
-        <select id="fNivel" multiple class="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm mb-1"></select>
+        <div class="mb-3"><label class="block text-xs font-semibold text-slate-500 mb-1">Sede / Área</label><div id="msArea" class="ms"></div></div>
+        <div class="mb-3"><label class="block text-xs font-semibold text-slate-500 mb-1">Dispositivo</label><div id="msDispositivo" class="ms"></div></div>
+        <div class="mb-3"><label class="block text-xs font-semibold text-slate-500 mb-1">Lector</label><div id="msLector" class="ms"></div></div>
+        <div class="mb-3"><label class="block text-xs font-semibold text-slate-500 mb-1">Modo de verificación</label><div id="msModo" class="ms"></div></div>
+        <div class="mb-3"><label class="block text-xs font-semibold text-slate-500 mb-1">Tipo de evento</label><div id="msTipoEvento" class="ms"></div></div>
+        <div class="mb-1"><label class="block text-xs font-semibold text-slate-500 mb-1">Nivel de evento</label><div id="msNivel" class="ms"></div></div>
       </aside>
 
       <!-- Contenido principal -->
       <main>
-        <!-- KPIs -->
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
           <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
             <div class="text-xs text-slate-500 font-semibold">Accesos (filtro actual)</div>
@@ -121,7 +121,6 @@
           </div>
         </div>
 
-        <!-- Tabs -->
         <div class="flex gap-2 mb-3">
           <button data-tab="resumen" class="tab-btn active text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Resumen</button>
           <button data-tab="incidentes" class="tab-btn text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Incidentes</button>
@@ -148,21 +147,14 @@
         </div>
 
         <div id="panel-incidentes" class="tab-panel hidden bg-white rounded-xl shadow-sm border border-slate-200">
-          <div class="p-4 border-b border-slate-200">
-            <h2 class="font-bold text-slate-800 text-sm">Detalle de incidentes (con los filtros activos)</h2>
-          </div>
+          <div class="p-4 border-b border-slate-200"><h2 class="font-bold text-slate-800 text-sm">Detalle de incidentes (con los filtros activos)</h2></div>
           <div class="overflow-x-auto max-h-[32rem]">
             <table class="w-full text-sm">
               <thead class="bg-slate-50 sticky top-0">
                 <tr class="text-left text-slate-500">
-                  <th class="px-4 py-2">ID</th>
-                  <th class="px-4 py-2">Colaborador</th>
-                  <th class="px-4 py-2">Sede/Área</th>
-                  <th class="px-4 py-2">Fecha</th>
-                  <th class="px-4 py-2">Ventana</th>
-                  <th class="px-4 py-2">Cantidad</th>
-                  <th class="px-4 py-2">Rango (min)</th>
-                  <th class="px-4 py-2">Dispositivo(s)</th>
+                  <th class="px-4 py-2">ID</th><th class="px-4 py-2">Colaborador</th><th class="px-4 py-2">Sede/Área</th>
+                  <th class="px-4 py-2">Fecha</th><th class="px-4 py-2">Ventana</th><th class="px-4 py-2">Cantidad</th>
+                  <th class="px-4 py-2">Rango (min)</th><th class="px-4 py-2">Dispositivo(s)</th>
                 </tr>
               </thead>
               <tbody id="tablaIncidentes"></tbody>
@@ -179,18 +171,10 @@
             <table class="w-full text-sm whitespace-nowrap">
               <thead class="bg-slate-50 sticky top-0">
                 <tr class="text-left text-slate-500">
-                  <th class="px-3 py-2">Tiempo</th>
-                  <th class="px-3 py-2">ID</th>
-                  <th class="px-3 py-2">Nombre</th>
-                  <th class="px-3 py-2">Depto</th>
-                  <th class="px-3 py-2">Sede/Área</th>
-                  <th class="px-3 py-2">Dispositivo</th>
-                  <th class="px-3 py-2">Lector</th>
-                  <th class="px-3 py-2">Puerta</th>
-                  <th class="px-3 py-2">Modo</th>
-                  <th class="px-3 py-2">Tipo evento</th>
-                  <th class="px-3 py-2">Nivel</th>
-                  <th class="px-3 py-2">Ventana</th>
+                  <th class="px-3 py-2">Tiempo</th><th class="px-3 py-2">ID</th><th class="px-3 py-2">Nombre</th>
+                  <th class="px-3 py-2">Depto</th><th class="px-3 py-2">Sede/Área</th><th class="px-3 py-2">Dispositivo</th>
+                  <th class="px-3 py-2">Lector</th><th class="px-3 py-2">Puerta</th><th class="px-3 py-2">Modo</th>
+                  <th class="px-3 py-2">Tipo evento</th><th class="px-3 py-2">Nivel</th><th class="px-3 py-2">Ventana</th>
                 </tr>
               </thead>
               <tbody id="tablaEventos"></tbody>
@@ -225,29 +209,136 @@ let colaboradoresElegidos = []; // [{id,nombre,apellido,departamento}]
 let eventosRaw = [];
 let charts = {};
 
+// =====================================================
+// Componente: multi-select con checklist + buscador
+// =====================================================
+function crearMultiSelect(containerId, etiqueta) {
+  const cont = $(containerId);
+  let opciones = [];
+  let seleccion = new Set();
+  let onChangeCb = () => {};
+
+  function render() {
+    const seleccionadas = opciones.filter((o) => seleccion.has(o));
+    cont.innerHTML = `
+      <button type="button" class="ms-btn">
+        <span>${etiqueta}</span>
+        ${seleccionadas.length ? `<span class="ms-badge">${seleccionadas.length}</span>` : ''}
+      </button>
+      <div class="ms-panel hidden">
+        <input type="text" placeholder="Buscar…" />
+        <div class="ms-options"></div>
+        <div class="ms-actions">
+          <button type="button" data-accion="todo">Todo</button>
+          <button type="button" data-accion="ninguno">Ninguno</button>
+        </div>
+      </div>`;
+    const btn = cont.querySelector('.ms-btn');
+    const panel = cont.querySelector('.ms-panel');
+    const search = cont.querySelector('input');
+    const optsDiv = cont.querySelector('.ms-options');
+
+    function renderOpciones(filtro = '') {
+      const f = filtro.toLowerCase();
+      optsDiv.innerHTML = opciones
+        .filter((o) => o.toLowerCase().includes(f))
+        .map((o) => `<label class="ms-option"><input type="checkbox" value="${o.replace(/"/g, '&quot;')}" ${seleccion.has(o) ? 'checked' : ''}/> <span>${o}</span></label>`)
+        .join('') || '<div class="text-slate-400 text-xs px-1 py-2">Sin opciones</div>';
+      optsDiv.querySelectorAll('input[type=checkbox]').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          if (cb.checked) seleccion.add(cb.value); else seleccion.delete(cb.value);
+          onChangeCb([...seleccion]);
+          render();
+          openPanel();
+          search.focus();
+        });
+      });
+    }
+
+    function openPanel() {
+      panel.classList.remove('hidden');
+      renderOpciones(search.value);
+    }
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const abierto = !panel.classList.contains('hidden');
+      document.querySelectorAll('.ms-panel').forEach((p) => p.classList.add('hidden'));
+      if (!abierto) openPanel();
+    });
+    search.addEventListener('input', () => renderOpciones(search.value));
+    search.addEventListener('click', (e) => e.stopPropagation());
+    cont.querySelector('[data-accion="todo"]').addEventListener('click', () => {
+      opciones.forEach((o) => seleccion.add(o));
+      onChangeCb([...seleccion]); render(); openPanel();
+    });
+    cont.querySelector('[data-accion="ninguno"]').addEventListener('click', () => {
+      seleccion.clear();
+      onChangeCb([...seleccion]); render(); openPanel();
+    });
+  }
+
+  document.addEventListener('click', () => {
+    const panel = cont.querySelector('.ms-panel');
+    if (panel) panel.classList.add('hidden');
+  });
+
+  render();
+
+  return {
+    setOptions(nuevas) { opciones = nuevas; seleccion = new Set([...seleccion].filter((s) => opciones.includes(s))); render(); },
+    getSelected() { return [...seleccion]; },
+    clear() { seleccion.clear(); render(); onChangeCb([]); },
+    onChange(cb) { onChangeCb = cb; },
+  };
+}
+
+const msDepto = crearMultiSelect('msDepto', 'Departamento / Sede');
+const msArea = crearMultiSelect('msArea', 'Sede / Área');
+const msDispositivo = crearMultiSelect('msDispositivo', 'Dispositivo');
+const msLector = crearMultiSelect('msLector', 'Lector');
+const msModo = crearMultiSelect('msModo', 'Modo de verificación');
+const msTipoEvento = crearMultiSelect('msTipoEvento', 'Tipo de evento');
+const msNivel = crearMultiSelect('msNivel', 'Nivel de evento');
+
+[msArea, msDispositivo, msLector, msModo, msTipoEvento, msNivel].forEach((ms) => ms.onChange(() => renderTodo()));
+
 // ---------- directorio ----------
 async function cargarDirectorio() {
   try {
     const res = await fetch(API_DIRECTORIO);
     const raw = await res.text();
     let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      throw new Error(`Respuesta no-JSON (status ${res.status}): ${raw.slice(0, 200)}`);
-    }
+    try { data = JSON.parse(raw); } catch { throw new Error(`Respuesta no-JSON (status ${res.status}): ${raw.slice(0, 200)}`); }
     if (!res.ok) throw new Error(data.error || data.errorMessage || `Error HTTP ${res.status}`);
     directorio = data.colaboradores;
-    llenarSelect($('fDepto'), uniq(directorio.map((c) => c.departamento)));
-    $('estadoDirectorio').textContent = `${directorio.length} colaboradores en el directorio`;
+    msDepto.setOptions(uniq(directorio.map((c) => c.departamento)));
+    $('estadoDirectorio').textContent = data.nota
+      ? `${directorio.length} colaboradores — ${data.nota}`
+      : `${directorio.length} colaboradores en el directorio`;
   } catch (err) {
-    $('estadoDirectorio').textContent = `Directorio no disponible: ${err.message}`;
+    $('estadoDirectorio').textContent = `Directorio no disponible (${err.message}) — puedes escribir el ID directamente`;
     console.error('Error cargando directorio:', err);
   }
 }
 cargarDirectorio();
 
-// ---------- autocompletar colaborador ----------
+// ---------- colaborador: autocompletar + agregar manual ----------
+function agregarColaboradorManual(valor) {
+  const v = valor.trim();
+  if (!v) return;
+  if (!/^90\d{4}$/.test(v)) {
+    alert('El ID debe tener 6 dígitos y empezar con "90" (ej. 907291).');
+    return;
+  }
+  if (colaboradoresElegidos.some((c) => c.id === v)) return;
+  const enDirectorio = directorio.find((c) => c.id === v);
+  colaboradoresElegidos.push(enDirectorio || { id: v, nombre: '(sin nombre en directorio)', apellido: '', departamento: '' });
+  renderChips();
+  $('buscarColaborador').value = '';
+  $('sugerencias').innerHTML = '';
+}
+
 $('buscarColaborador').addEventListener('input', (e) => {
   const q = e.target.value.trim().toLowerCase();
   const cont = $('sugerencias');
@@ -272,6 +363,16 @@ $('buscarColaborador').addEventListener('input', (e) => {
   });
 });
 
+$('buscarColaborador').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const cont = $('sugerencias');
+    const primera = cont.querySelector('[data-id]');
+    if (primera) primera.click();
+    else agregarColaboradorManual(e.target.value);
+  }
+});
+
 function renderChips() {
   $('chipsColaboradores').innerHTML = colaboradoresElegidos
     .map((c) => `<span class="chip">${c.id} ${c.nombre} <button data-id="${c.id}">×</button></span>`)
@@ -288,40 +389,38 @@ $('btnLimpiarBusqueda').addEventListener('click', () => {
   colaboradoresElegidos = [];
   renderChips();
   $('buscarColaborador').value = '';
-  [...$('fDepto').options].forEach((o) => (o.selected = false));
+  msDepto.clear();
 });
 
 // ---------- utilidades ----------
 function uniq(arr) { return [...new Set(arr.filter((v) => v !== '' && v != null))].sort(); }
-function llenarSelect(sel, valores) { sel.innerHTML = valores.map((v) => `<option value="${v}">${v}</option>`).join(''); }
-function seleccionados(sel) { return [...sel.selectedOptions].map((o) => o.value); }
 
 function resolverPines() {
   const idsDirectos = colaboradoresElegidos.map((c) => c.id);
-  const deptosElegidos = seleccionados($('fDepto'));
+  const deptosElegidos = msDepto.getSelected();
   const idsPorDepto = deptosElegidos.length
     ? directorio.filter((c) => deptosElegidos.includes(c.departamento)).map((c) => c.id)
     : [];
   return uniq([...idsDirectos, ...idsPorDepto]);
 }
 
-// ---------- filtros de refinamiento (post-consulta) ----------
+// ---------- refinar (post-consulta) ----------
 function poblarFiltrosRefinar(eventos) {
-  llenarSelect($('fArea'), uniq(eventos.map((e) => e.area)));
-  llenarSelect($('fDispositivo'), uniq(eventos.map((e) => e.dispositivo)));
-  llenarSelect($('fLector'), uniq(eventos.map((e) => e.lector)));
-  llenarSelect($('fModo'), uniq(eventos.map((e) => e.modoVerificacion)));
-  llenarSelect($('fTipoEvento'), uniq(eventos.map((e) => e.tipoEvento)));
-  llenarSelect($('fNivel'), uniq(eventos.map((e) => e.nivelEvento)));
+  msArea.setOptions(uniq(eventos.map((e) => e.area)));
+  msDispositivo.setOptions(uniq(eventos.map((e) => e.dispositivo)));
+  msLector.setOptions(uniq(eventos.map((e) => e.lector)));
+  msModo.setOptions(uniq(eventos.map((e) => e.modoVerificacion)));
+  msTipoEvento.setOptions(uniq(eventos.map((e) => e.tipoEvento)));
+  msNivel.setOptions(uniq(eventos.map((e) => e.nivelEvento)));
 }
 
 function aplicarRefinar(eventos) {
-  const areas = seleccionados($('fArea'));
-  const dispositivos = seleccionados($('fDispositivo'));
-  const lectores = seleccionados($('fLector'));
-  const modos = seleccionados($('fModo'));
-  const tipos = seleccionados($('fTipoEvento'));
-  const niveles = seleccionados($('fNivel'));
+  const areas = msArea.getSelected();
+  const dispositivos = msDispositivo.getSelected();
+  const lectores = msLector.getSelected();
+  const modos = msModo.getSelected();
+  const tipos = msTipoEvento.getSelected();
+  const niveles = msNivel.getSelected();
 
   return eventos.filter((e) =>
     (areas.length === 0 || areas.includes(e.area)) &&
@@ -348,15 +447,9 @@ function calcularIncidentes(eventos) {
     const ordenada = [...lista].sort((a, b) => a.tiempo.localeCompare(b.tiempo));
     const rango = (new Date(ordenada.at(-1).tiempo.replace(' ', 'T')) - new Date(ordenada[0].tiempo.replace(' ', 'T'))) / 60000;
     incidentes.push({
-      id: ordenada[0].id,
-      nombre: ordenada[0].nombre,
-      apellido: ordenada[0].apellido,
-      area: ordenada[0].area,
-      fecha: ordenada[0].fecha,
-      horaVentana: ordenada[0].horaRedondeada.split(' ')[1],
-      cantidad: ordenada.length,
-      rangoMinutos: Math.round(rango * 10) / 10,
-      dispositivos: [...new Set(ordenada.map((e) => e.dispositivo))],
+      id: ordenada[0].id, nombre: ordenada[0].nombre, apellido: ordenada[0].apellido, area: ordenada[0].area,
+      fecha: ordenada[0].fecha, horaVentana: ordenada[0].horaRedondeada.split(' ')[1], cantidad: ordenada.length,
+      rangoMinutos: Math.round(rango * 10) / 10, dispositivos: [...new Set(ordenada.map((e) => e.dispositivo))],
     });
   }
   incidentes.sort((a, b) => b.cantidad - a.cantidad);
@@ -370,10 +463,7 @@ function calcularResumenColaborador(eventos, incidentes) {
     const c = porId.get(e.id);
     if (e.dentroVentana) c.horas[e.horaNumero] = (c.horas[e.horaNumero] || 0) + 1;
   }
-  for (const inc of incidentes) {
-    const c = porId.get(inc.id);
-    if (c) c.incidentes += 1;
-  }
+  for (const inc of incidentes) { const c = porId.get(inc.id); if (c) c.incidentes += 1; }
   return [...porId.values()].sort((a, b) => b.incidentes - a.incidentes);
 }
 
@@ -491,16 +581,11 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
   });
 });
 
-// ---------- refinar: re-render en vivo ----------
-['fArea', 'fDispositivo', 'fLector', 'fModo', 'fTipoEvento', 'fNivel'].forEach((id) =>
-  $(id).addEventListener('change', renderTodo)
-);
 $('btnLimpiarRefinar').addEventListener('click', () => {
-  document.querySelectorAll('aside select').forEach((s) => [...s.options].forEach((o) => (o.selected = false)));
-  renderTodo();
+  [msArea, msDispositivo, msLector, msModo, msTipoEvento, msNivel].forEach((ms) => ms.clear());
 });
 
-// ---------- actualizar (llamada a la function) ----------
+// ---------- actualizar ----------
 async function actualizar() {
   const startDate = `${$('startDate').value} 00:00:00`;
   const endDate = `${$('endDate').value} 23:59:59`;
@@ -523,11 +608,7 @@ async function actualizar() {
     const res = await fetch(`${API_EVENTOS}?${params.toString()}`);
     const raw = await res.text();
     let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      throw new Error(`Respuesta no-JSON (status ${res.status}): ${raw.slice(0, 300)}`);
-    }
+    try { data = JSON.parse(raw); } catch { throw new Error(`Respuesta no-JSON (status ${res.status}): ${raw.slice(0, 300)}`); }
     if (!res.ok) throw new Error(data.error || data.errorMessage || `Error HTTP ${res.status} sin detalle`);
 
     eventosRaw = data.eventos;
