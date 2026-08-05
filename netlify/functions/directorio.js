@@ -32,6 +32,13 @@ async function fetchAllPersons(baseUrl, token) {
         body: JSON.stringify({ pageNo, pageSize: PAGE_SIZE }),
         signal: controller.signal,
       });
+    } catch (e) {
+      clearTimeout(timeoutId);
+      throw new Error(
+        e.name === 'AbortError'
+          ? `ZKBio no respondió a tiempo pidiendo el directorio (página ${pageNo})`
+          : `No se pudo conectar a ZKBio para el directorio: ${e.message}`
+      );
     } finally {
       clearTimeout(timeoutId);
     }
