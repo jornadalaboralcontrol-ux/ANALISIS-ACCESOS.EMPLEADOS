@@ -2,19 +2,23 @@
 //
 // Directorio de colaboradores para poblar los filtros ANTES de consultar accesos.
 //
-// Plan A: api/v2/person/getPersonList (maestro de personas, ligero).
-// Plan B (si Plan A falla o esta instalación de ZKBio no lo soporta igual que
-//         el manual): derivarlo escaneando transaction/list de los últimos
-//         N días — el mismo endpoint que ya sabemos que funciona — y
-//         quedándonos con la primera aparición de cada pin (nombre, apellido,
-//         departamento). Esto puede no incluir colaboradores sin accesos
-//         recientes, pero garantiza que el filtro funcione.
+// Plan A: api/v2/person/getPersonList — se prueban varias variantes de la
+// llamada porque distintas instalaciones de ZKBio responden distinto:
+//   A1) POST con body JSON {pageNo,pageSize}, access_token en query string
+//   A2) GET con pageNo/pageSize/access_token como query string
+//   A3) POST con access_token también dentro del body
+// Se usa la primera variante que regrese el formato esperado {code:0, data:{...}}.
+//
+// Plan B (si ninguna variante de A funciona): derivarlo escaneando
+// transaction/list de los últimos N días — el mismo endpoint que ya sabemos
+// que funciona — y quedándonos con la primera aparición de cada pin.
+// Esto puede no incluir sedes/colaboradores sin accesos en ese periodo.
 //
 // Se queda solo con pines de colaborador (6 dígitos que empiezan con "90").
 
 const PAGE_SIZE = 1000;
 const PIN_COLABORADOR_REGEX = /^90\d{4}$/;
-const DIAS_FALLBACK = 45;
+const DIAS_FALLBACK = 120;
 
 function isColaborador(pin) {
   return PIN_COLABORADOR_REGEX.test(String(pin || '').trim());
@@ -32,39 +36,61 @@ async function fetchConTimeout(url, opts, timeoutMs) {
   }
 }
 
-// ---- Plan A ----
-async function intentarPersonList(baseUrl, token) {
-  const all = [];
-  let pageNo = 1;
-  while (pageNo <= 50) {
-    const url = new URL('/api/v2/person/getPersonList', baseUrl);
+async function unaPagina(baseUrl, token, pageNo, variante) {
+  const url = new URL('/api/v2/person/getPersonList', baseUrl);
+  let opts;
+  if (variante === 'A2_GET') {
+    url.searchParams.set('pageNo', String(pageNo));
+    url.searchParams.set('pageSize', String(PAGE_SIZE));
     url.searchParams.set('access_token', token);
-    const res = await fetchConTimeout(
-      url.toString(),
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageNo, pageSize: PAGE_SIZE }) },
-      8000
-    );
-    const raw = await res.text();
-    let json;
-    try {
-      json = JSON.parse(raw);
-    } catch {
-      throw new Error(`respuesta no-JSON: ${raw.slice(0, 150)}`);
-    }
-    if (!res.ok || json.code !== 0 || !json.data) {
-      throw new Error(`formato inesperado (status ${res.status}, code ${json.code}, message ${json.message || 'n/a'})`);
-    }
-    const page = json.data;
-    all.push(...(page.data || []));
-    if (page.lastPage || (page.data || []).length === 0) break;
-    pageNo += 1;
+    opts = { method: 'GET' };
+  } else {
+    url.searchParams.set('access_token', token);
+    const body = variante === 'A3_TOKEN_EN_BODY'
+      ? { pageNo, pageSize: PAGE_SIZE, access_token: token }
+      : { pageNo, pageSize: PAGE_SIZE };
+    opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
   }
-  return all.map((p) => ({
-    id: String(p.pin),
-    nombre: p.name || '',
-    apellido: p.lastName || '',
-    departamento: p.deptName || '',
-  }));
+
+  const res = await fetchConTimeout(url.toString(), opts, 8000);
+  const raw = await res.text();
+  let json;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new Error(`respuesta no-JSON (status ${res.status}): ${raw.slice(0, 150)}`);
+  }
+  if (!res.ok || json.code !== 0 || !json.data) {
+    throw new Error(`formato inesperado (status ${res.status}, code ${json.code}, message ${json.message || 'n/a'})`);
+  }
+  return json.data;
+}
+
+async function intentarPersonList(baseUrl, token) {
+  const variantes = ['A1_POST', 'A2_GET', 'A3_TOKEN_EN_BODY'];
+  const errores = [];
+
+  for (const variante of variantes) {
+    try {
+      const all = [];
+      let pageNo = 1;
+      while (pageNo <= 50) {
+        const page = await unaPagina(baseUrl, token, pageNo, variante);
+        all.push(...(page.data || []));
+        if (page.lastPage || (page.data || []).length === 0) break;
+        pageNo += 1;
+      }
+      return {
+        variante,
+        colaboradores: all.map((p) => ({
+          id: String(p.pin), nombre: p.name || '', apellido: p.lastName || '', departamento: p.deptName || '',
+        })),
+      };
+    } catch (e) {
+      errores.push(`${variante}: ${e.message}`);
+    }
+  }
+  throw new Error(errores.join(' | '));
 }
 
 // ---- Plan B: derivar del log de accesos reciente ----
@@ -81,7 +107,7 @@ async function derivarDeTransacciones(baseUrl, token) {
   const LIMITE_MS = 8000;
 
   while (pageNo <= 200) {
-    if (Date.now() - inicio > LIMITE_MS) break; // nos quedamos con lo que ya juntamos
+    if (Date.now() - inicio > LIMITE_MS) break;
     const url = new URL('/api/v2/transaction/list', baseUrl);
     url.searchParams.set('startDate', startDate);
     url.searchParams.set('endDate', endDate);
@@ -116,13 +142,17 @@ exports.handler = async () => {
 
     let colaboradores;
     let fuente;
+    let detalle = null;
     try {
-      colaboradores = await intentarPersonList(baseUrl, token);
+      const r = await intentarPersonList(baseUrl, token);
+      colaboradores = r.colaboradores;
       fuente = 'directorio';
+      detalle = `variante ${r.variante}`;
     } catch (eA) {
       try {
         colaboradores = await derivarDeTransacciones(baseUrl, token);
         fuente = 'derivado';
+        detalle = `plan A falló (${eA.message}) — se usó accesos de los últimos ${DIAS_FALLBACK} días`;
       } catch (eB) {
         throw new Error(`Directorio no disponible (${eA.message}) y tampoco se pudo derivar de accesos (${eB.message})`);
       }
@@ -138,8 +168,8 @@ exports.handler = async () => {
         total: colaboradores.length,
         fuente,
         nota: fuente === 'derivado'
-          ? `Derivado de accesos de los últimos ${DIAS_FALLBACK} días — puede no incluir colaboradores sin accesos recientes.`
-          : null,
+          ? `Derivado de accesos de los últimos ${DIAS_FALLBACK} días — puede no incluir sedes/colaboradores sin accesos en ese periodo. (${detalle})`
+          : detalle,
       }),
     };
   } catch (err) {
