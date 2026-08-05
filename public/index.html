@@ -6,7 +6,7 @@
 <title>Análisis de Accesos — Colaboradores</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
   body { font-family: Arial, Helvetica, sans-serif; }
   ::-webkit-scrollbar { height: 8px; width: 8px; }
@@ -126,20 +126,20 @@
         </div>
 
         <div class="flex gap-2 mb-3">
-          <button data-tab="insights" class="tab-btn active text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Insights</button>
-          <button data-tab="resumen" class="tab-btn text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Resumen</button>
+          <button data-tab="resumen" class="tab-btn active text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Resumen</button>
+          <button data-tab="insights" class="tab-btn text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Insights</button>
           <button data-tab="incidentes" class="tab-btn text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Incidentes</button>
           <button data-tab="eventos" class="tab-btn text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Eventos (todos los campos)</button>
         </div>
 
-        <div id="panel-insights" class="tab-panel">
+        <div id="panel-insights" class="tab-panel hidden">
           <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
             <h2 class="font-bold text-slate-800 mb-3 text-sm">Lectura de los resultados (según el filtro activo)</h2>
             <ul id="listaInsights" class="space-y-2 text-sm text-slate-700 list-disc list-inside"></ul>
           </div>
         </div>
 
-        <div id="panel-resumen" class="tab-panel hidden grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div id="panel-resumen" class="tab-panel grid grid-cols-1 xl:grid-cols-2 gap-4">
           <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
             <h2 class="font-bold text-slate-800 mb-3 text-sm">Ranking por incidentes</h2>
             <canvas id="chartRanking" height="260"></canvas>
@@ -460,8 +460,10 @@ function calcularIncidentes(eventos) {
     const rango = (new Date(ordenada.at(-1).tiempo.replace(' ', 'T')) - new Date(ordenada[0].tiempo.replace(' ', 'T'))) / 60000;
     incidentes.push({
       id: ordenada[0].id, nombre: ordenada[0].nombre, apellido: ordenada[0].apellido, area: ordenada[0].area,
-      fecha: ordenada[0].fecha, horaVentana: ordenada[0].horaRedondeada.split(' ')[1], cantidad: ordenada.length,
-      rangoMinutos: Math.round(rango * 10) / 10, dispositivos: [...new Set(ordenada.map((e) => e.dispositivo))],
+      departamento: ordenada[0].departamento, fecha: ordenada[0].fecha, horaVentana: ordenada[0].horaRedondeada.split(' ')[1],
+      cantidad: ordenada.length, rangoMinutos: Math.round(rango * 10) / 10,
+      dispositivos: [...new Set(ordenada.map((e) => e.dispositivo))],
+      horarios: ordenada.map((e) => e.tiempo.split(' ')[1]),
     });
   }
   incidentes.sort((a, b) => b.cantidad - a.cantidad);
@@ -471,11 +473,18 @@ function calcularIncidentes(eventos) {
 function calcularResumenColaborador(eventos, incidentes) {
   const porId = new Map();
   for (const e of eventos) {
-    if (!porId.has(e.id)) porId.set(e.id, { id: e.id, nombre: e.nombre, apellido: e.apellido, incidentes: 0, horas: {} });
+    if (!porId.has(e.id)) porId.set(e.id, { id: e.id, nombre: e.nombre, apellido: e.apellido, departamento: e.departamento, totalAccesos: 0, enVentana: 0, incidentes: 0, maxEnVentana: 0, horas: {} });
     const c = porId.get(e.id);
-    if (e.dentroVentana) c.horas[e.horaNumero] = (c.horas[e.horaNumero] || 0) + 1;
+    c.totalAccesos += 1;
+    if (e.dentroVentana) {
+      c.enVentana += 1;
+      c.horas[e.horaNumero] = (c.horas[e.horaNumero] || 0) + 1;
+    }
   }
-  for (const inc of incidentes) { const c = porId.get(inc.id); if (c) c.incidentes += 1; }
+  for (const inc of incidentes) {
+    const c = porId.get(inc.id);
+    if (c) { c.incidentes += 1; c.maxEnVentana = Math.max(c.maxEnVentana, inc.cantidad); }
+  }
   return [...porId.values()].sort((a, b) => b.incidentes - a.incidentes);
 }
 
@@ -527,32 +536,165 @@ function generarInsights(eventos, incidentes, resumen) {
   $('listaInsights').innerHTML = bullets.map((b) => `<li>${b}</li>`).join('');
 }
 
-// ---------- exportar a Excel ----------
-function exportarExcel(eventos, incidentes, resumen) {
-  const wb = XLSX.utils.book_new();
+// ---------- exportar a Excel (misma estructura que el análisis original) ----------
+async function exportarExcel(eventos, incidentes, resumen) {
+  const wb = new ExcelJS.Workbook();
+  const FONT = 'Arial';
+  const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E5F' } };
+  const headerFont = { name: FONT, bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+  const titleFont = { name: FONT, bold: true, size: 13, color: { argb: 'FF1F4E5F' } };
+  const normalFont = { name: FONT, size: 10 };
+  const border = { top: { style: 'thin', color: { argb: 'FFD9D9D9' } }, bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } }, left: { style: 'thin', color: { argb: 'FFD9D9D9' } }, right: { style: 'thin', color: { argb: 'FFD9D9D9' } } };
 
-  const wsEventos = XLSX.utils.json_to_sheet(eventos.map((e) => ({
-    Tiempo: e.tiempo, ID: e.id, Nombre: e.nombre, Apellido: e.apellido, Departamento: e.departamento,
-    'Sede/Área': e.area, Dispositivo: e.dispositivo, Lector: e.lector, Puerta: e.puerta,
-    'Modo verificación': e.modoVerificacion, 'Tipo evento': e.tipoEvento, 'Nivel evento': e.nivelEvento,
-    'Hora redondeada': e.horaRedondeada, 'Dentro ventana ±10min': e.dentroVentana ? 'Sí' : 'No',
-  })));
-  XLSX.utils.book_append_sheet(wb, wsEventos, 'Eventos');
+  function estiloEncabezado(row) {
+    row.eachCell((cell) => {
+      cell.font = headerFont;
+      cell.fill = headerFill;
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = border;
+    });
+  }
 
-  const wsIncidentes = XLSX.utils.json_to_sheet(incidentes.map((i) => ({
-    ID: i.id, Nombre: i.nombre, Apellido: i.apellido, 'Sede/Área': i.area, Fecha: i.fecha,
-    'Ventana horaria': i.horaVentana, Cantidad: i.cantidad, 'Rango (min)': i.rangoMinutos,
-    Dispositivos: i.dispositivos.join(', '),
-  })));
-  XLSX.utils.book_append_sheet(wb, wsIncidentes, 'Incidentes');
+  const eventosOrdenados = [...eventos].sort((a, b) => b.tiempo.localeCompare(a.tiempo));
+  const totalEventos = eventos.length;
+  const totalVentana = eventos.filter((e) => e.dentroVentana).length;
+  const colaboradoresTxt = colaboradoresElegidos.length ? colaboradoresElegidos.map((c) => `${c.id} ${c.nombre} ${c.apellido}`).join(', ') : '(sin filtro puntual)';
+  const deptosTxt = msDepto.getSelected().join(', ') || '(sin filtro)';
 
-  const wsResumen = XLSX.utils.json_to_sheet(resumen.map((c) => ({
-    ID: c.id, Nombre: c.nombre, Apellido: c.apellido, Incidentes: c.incidentes,
-  })));
-  XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen_Colaborador');
+  // ---- Resumen ----
+  const ws0 = wb.addWorksheet('Resumen');
+  ws0.views = [{ showGridLines: false }];
+  ws0.getColumn(2).width = 100;
+  ws0.getCell('B2').value = 'Análisis de Accesos — Colaboradores en Ventana Horaria ±10 min';
+  ws0.getCell('B2').font = titleFont;
+  ws0.getCell('B3').value = 'Detección de posible mal uso de acceso (dejar pasar usuarios sin su propio registro)';
+  ws0.getCell('B3').font = { name: FONT, italic: true, size: 10, color: { argb: 'FF555555' } };
 
-  const fecha = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, `analisis_accesos_${fecha}.xlsx`);
+  const lineas = [
+    '',
+    'FILTROS APLICADOS EN ESTA EXPORTACIÓN',
+    `Colaborador(es): ${colaboradoresTxt}`,
+    `Departamento(s): ${deptosTxt}`,
+    `Rango de fechas: ${$('startDate').value} a ${$('endDate').value}`,
+    '',
+    'RESULTADOS',
+    `Accesos analizados: ${totalEventos}`,
+    `Dentro de ventana ±10min: ${totalVentana}`,
+    `Incidentes (2+ accesos en la misma ventana): ${incidentes.length}`,
+    '',
+    'METODOLOGÍA',
+    'Se redondea cada acceso a la hora más cercana. Cae "dentro de ventana" si la diferencia es de ±10 minutos.',
+    'Un incidente ocurre cuando el mismo colaborador registra 2+ accesos dentro de la misma ventana horaria (mismo día, misma hora).',
+    '',
+    'HOJAS DE ESTE LIBRO',
+    '1. Resumen — esta hoja',
+    '2. Detalle_Incidentes — ventanas con 2+ accesos del mismo colaborador',
+    '3. Resumen_Colaborador — total de accesos e incidentes por colaborador',
+    '4. Tabla_Dinamica_Hora — matriz Colaborador x Hora del día',
+    '5. Eventos_Filtrados — todos los accesos con columnas calculadas',
+  ];
+  let r = 4;
+  lineas.forEach((linea) => {
+    const cell = ws0.getCell(`B${r}`);
+    cell.value = linea;
+    cell.font = linea && linea === linea.toUpperCase() && !/^\d/.test(linea) ? { name: FONT, bold: true, size: 10, color: { argb: 'FF1F4E5F' } } : normalFont;
+    r += 1;
+  });
+
+  // ---- Detalle_Incidentes ----
+  const ws1 = wb.addWorksheet('Detalle_Incidentes');
+  ws1.views = [{ showGridLines: false }];
+  ws1.mergeCells('A1:J1');
+  ws1.getCell('A1').value = `Detalle de Incidentes — ${incidentes.length} ventanas horarias con 2+ accesos del mismo colaborador`;
+  ws1.getCell('A1').font = titleFont;
+  ws1.mergeCells('A2:J2');
+  ws1.getCell('A2').value = 'Casos concretos a revisar: mismo colaborador registró varias aperturas dentro de la misma ventana ±10 min.';
+  ws1.getCell('A2').font = { name: FONT, italic: true, size: 9, color: { argb: 'FF555555' } };
+
+  const headers1 = ['ID', 'Nombre', 'Apellido', 'Departamento', 'Fecha', 'Hora_Ventana', 'Cantidad_Accesos', 'Horarios_Exactos', 'Rango_Minutos', 'Dispositivos'];
+  const hr1 = ws1.getRow(4);
+  headers1.forEach((h, i) => { hr1.getCell(i + 1).value = h; });
+  estiloEncabezado(hr1);
+  incidentes.forEach((inc) => {
+    const row = ws1.addRow([inc.id, inc.nombre, inc.apellido, inc.departamento, inc.fecha, inc.horaVentana, inc.cantidad, inc.horarios.join(', '), inc.rangoMinutos, inc.dispositivos.join(', ')]);
+    row.eachCell((cell) => { cell.font = normalFont; cell.border = border; });
+  });
+  ws1.columns.forEach((col, i) => { col.width = [10, 18, 18, 22, 12, 12, 16, 34, 14, 30][i] || 15; });
+  ws1.views = [{ state: 'frozen', ySplit: 4, showGridLines: false }];
+
+  // ---- Resumen_Colaborador ----
+  const ws2 = wb.addWorksheet('Resumen_Colaborador');
+  ws2.views = [{ showGridLines: false }];
+  ws2.mergeCells('A1:H1');
+  ws2.getCell('A1').value = 'Resumen por Colaborador — ordenado de mayor a menor riesgo';
+  ws2.getCell('A1').font = titleFont;
+  const headers2 = ['ID', 'Nombre', 'Apellido', 'Departamento', 'Total_Accesos', 'Accesos_En_Ventana_Hora', 'Ventanas_Con_Incidente_2mas', 'Max_Accesos_En_Una_Ventana'];
+  const hr2 = ws2.getRow(3);
+  headers2.forEach((h, i) => { hr2.getCell(i + 1).value = h; });
+  estiloEncabezado(hr2);
+  resumen.forEach((c) => {
+    const row = ws2.addRow([c.id, c.nombre, c.apellido, c.departamento, c.totalAccesos, c.enVentana, c.incidentes, c.maxEnVentana]);
+    row.eachCell((cell) => { cell.font = normalFont; cell.border = border; });
+  });
+  ws2.columns.forEach((col, i) => { col.width = [10, 18, 18, 22, 14, 20, 22, 20][i] || 15; });
+  ws2.views = [{ state: 'frozen', ySplit: 3, showGridLines: false }];
+
+  // ---- Tabla_Dinamica_Hora ----
+  const ws3 = wb.addWorksheet('Tabla_Dinamica_Hora');
+  ws3.views = [{ showGridLines: false }];
+  const horasUsadas = uniq(eventos.filter((e) => e.dentroVentana).map((e) => e.horaNumero)).sort((a, b) => a - b);
+  ws3.mergeCells(1, 1, 1, 4 + horasUsadas.length);
+  ws3.getCell('A1').value = 'Tabla Dinámica: Accesos por Colaborador y Hora del Día (dentro de ventana ±10 min)';
+  ws3.getCell('A1').font = titleFont;
+  const headers3 = ['ID', 'Nombre', 'Apellido', ...horasUsadas.map((h) => `${String(h).padStart(2, '0')}:00`), 'Total'];
+  const hr3 = ws3.getRow(3);
+  headers3.forEach((h, i) => { hr3.getCell(i + 1).value = h; });
+  estiloEncabezado(hr3);
+  resumen.forEach((c) => {
+    const valores = horasUsadas.map((h) => c.horas[h] || 0);
+    const total = valores.reduce((a, b) => a + b, 0);
+    const row = ws3.addRow([c.id, c.nombre, c.apellido, ...valores, total]);
+    row.eachCell((cell) => { cell.font = normalFont; cell.border = border; });
+  });
+  ws3.columns.forEach((col, i) => { col.width = [10, 18, 18][i] || 8; });
+  ws3.views = [{ state: 'frozen', xSplit: 3, ySplit: 3, showGridLines: false }];
+
+  // ---- Eventos_Filtrados ----
+  const ws4 = wb.addWorksheet('Eventos_Filtrados');
+  ws4.views = [{ showGridLines: false }];
+  const headers4 = ['Tiempo', 'ID', 'Nombre', 'Apellido', 'Departamento', 'Dispositivo', 'Lector', 'Fecha', 'Hora_Redondeada', 'Minutos_Diferencia', 'Dentro_Ventana_10min', 'Hora_Numero', 'Grupo_Ventana', 'Repeticiones_En_Ventana', 'Primera_Fila_Grupo', 'Alerta_Posible_Mal_Uso'];
+  const hr4 = ws4.getRow(1);
+  headers4.forEach((h, i) => { hr4.getCell(i + 1).value = h; });
+  estiloEncabezado(hr4);
+
+  const gruposVistos = new Set();
+  const conteoGrupo = new Map();
+  eventosOrdenados.forEach((e) => { if (e.dentroVentana) conteoGrupo.set(`${e.id}|${e.horaRedondeada}`, (conteoGrupo.get(`${e.id}|${e.horaRedondeada}`) || 0) + 1); });
+
+  eventosOrdenados.forEach((e) => {
+    const grupo = `${e.id}|${e.horaRedondeada}`;
+    const primeraFila = !gruposVistos.has(grupo) ? 'Sí' : 'No';
+    gruposVistos.add(grupo);
+    const repeticiones = e.dentroVentana ? conteoGrupo.get(grupo) : '';
+    const alerta = e.dentroVentana && conteoGrupo.get(grupo) >= 2 ? '⚠ Revisar' : '';
+    const row = ws4.addRow([
+      e.tiempo, e.id, e.nombre, e.apellido, e.departamento, e.dispositivo, e.lector, e.fecha,
+      e.horaRedondeada, e.diffMin, e.dentroVentana ? 'Sí' : 'No', e.horaNumero, grupo, repeticiones, primeraFila, alerta,
+    ]);
+    row.eachCell((cell) => { cell.font = normalFont; cell.border = border; });
+    if (alerta) row.eachCell((cell) => { cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8CBAD' } }; });
+  });
+  ws4.columns.forEach((col, i) => { col.width = [18, 10, 16, 16, 20, 18, 26, 12, 17, 16, 16, 12, 22, 16, 14, 16][i] || 15; });
+  ws4.views = [{ state: 'frozen', ySplit: 1, showGridLines: false }];
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `analisis_accesos_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 function renderKPIs(eventos, incidentes, resumen) {
   $('kpiTotal').textContent = eventos.length.toLocaleString('es-MX');
@@ -657,7 +799,18 @@ function renderTodo() {
   renderBarraSimple('tipoEvento', 'chartTipoEvento', contarPor(filtrados, 'tipoEvento'), '#8b5cf6');
   generarInsights(filtrados, incidentes, resumen);
 
-  $('btnExportar').onclick = () => exportarExcel(filtrados, incidentes, resumen);
+  $('btnExportar').onclick = async () => {
+    $('btnExportar').disabled = true;
+    $('btnExportar').textContent = 'Generando…';
+    try {
+      await exportarExcel(filtrados, incidentes, resumen);
+    } catch (err) {
+      alert('No se pudo generar el Excel: ' + err.message);
+    } finally {
+      $('btnExportar').disabled = false;
+      $('btnExportar').textContent = 'Exportar a Excel';
+    }
+  };
 }
 
 // ---------- tabs ----------
