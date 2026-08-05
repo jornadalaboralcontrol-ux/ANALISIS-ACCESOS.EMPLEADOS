@@ -229,13 +229,20 @@ let charts = {};
 async function cargarDirectorio() {
   try {
     const res = await fetch(API_DIRECTORIO);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'no se pudo cargar');
+    const raw = await res.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(`Respuesta no-JSON (status ${res.status}): ${raw.slice(0, 200)}`);
+    }
+    if (!res.ok) throw new Error(data.error || data.errorMessage || `Error HTTP ${res.status}`);
     directorio = data.colaboradores;
     llenarSelect($('fDepto'), uniq(directorio.map((c) => c.departamento)));
     $('estadoDirectorio').textContent = `${directorio.length} colaboradores en el directorio`;
   } catch (err) {
-    $('estadoDirectorio').textContent = 'No se pudo cargar el directorio (puedes seguir por departamento o sin filtro)';
+    $('estadoDirectorio').textContent = `Directorio no disponible: ${err.message}`;
+    console.error('Error cargando directorio:', err);
   }
 }
 cargarDirectorio();
