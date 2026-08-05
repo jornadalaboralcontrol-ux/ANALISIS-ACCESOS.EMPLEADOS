@@ -6,6 +6,7 @@
 <title>Análisis de Accesos — Colaboradores</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   body { font-family: Arial, Helvetica, sans-serif; }
   ::-webkit-scrollbar { height: 8px; width: 8px; }
@@ -73,6 +74,9 @@
         Actualizar
       </button>
       <button id="btnLimpiarBusqueda" class="text-sm text-blue-600 hover:underline">Limpiar búsqueda</button>
+      <button id="btnExportar" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-4 py-2.5 rounded-lg transition">
+        Exportar a Excel
+      </button>
       <span id="estado" class="text-sm text-slate-500"></span>
     </div>
     <p class="text-xs text-slate-400 mt-2">
@@ -122,12 +126,20 @@
         </div>
 
         <div class="flex gap-2 mb-3">
-          <button data-tab="resumen" class="tab-btn active text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Resumen</button>
+          <button data-tab="insights" class="tab-btn active text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Insights</button>
+          <button data-tab="resumen" class="tab-btn text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Resumen</button>
           <button data-tab="incidentes" class="tab-btn text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Incidentes</button>
           <button data-tab="eventos" class="tab-btn text-sm font-semibold px-4 py-2 rounded-lg bg-white border border-slate-200">Eventos (todos los campos)</button>
         </div>
 
-        <div id="panel-resumen" class="tab-panel grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div id="panel-insights" class="tab-panel">
+          <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+            <h2 class="font-bold text-slate-800 mb-3 text-sm">Lectura de los resultados (según el filtro activo)</h2>
+            <ul id="listaInsights" class="space-y-2 text-sm text-slate-700 list-disc list-inside"></ul>
+          </div>
+        </div>
+
+        <div id="panel-resumen" class="tab-panel hidden grid grid-cols-1 xl:grid-cols-2 gap-4">
           <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
             <h2 class="font-bold text-slate-800 mb-3 text-sm">Ranking por incidentes</h2>
             <canvas id="chartRanking" height="260"></canvas>
@@ -467,7 +479,81 @@ function calcularResumenColaborador(eventos, incidentes) {
   return [...porId.values()].sort((a, b) => b.incidentes - a.incidentes);
 }
 
-// ---------- render ----------
+function generarInsights(eventos, incidentes, resumen) {
+  const bullets = [];
+  const totalEventos = eventos.length;
+  const totalVentana = eventos.filter((e) => e.dentroVentana).length;
+  const pctVentana = totalEventos ? Math.round((totalVentana / totalEventos) * 100) : 0;
+
+  bullets.push(`Se analizaron <strong>${totalEventos.toLocaleString('es-MX')}</strong> accesos con los filtros actuales, de los cuales <strong>${totalVentana.toLocaleString('es-MX')}</strong> (${pctVentana}%) caen dentro de una ventana de ±10 min de alguna hora en punto.`);
+
+  if (incidentes.length === 0) {
+    bullets.push('No se detectaron incidentes (2+ accesos del mismo colaborador en la misma ventana horaria) con este filtro — no hay señales de mal uso de acceso en este corte.');
+    $('listaInsights').innerHTML = bullets.map((b) => `<li>${b}</li>`).join('');
+    return;
+  }
+
+  bullets.push(`Se detectaron <strong>${incidentes.length.toLocaleString('es-MX')}</strong> incidentes (ventanas con 2+ accesos del mismo colaborador).`);
+
+  const conIncidentes = resumen.filter((c) => c.incidentes > 0).sort((a, b) => b.incidentes - a.incidentes);
+  const top = conIncidentes[0];
+  if (top) {
+    const pctTop = Math.round((top.incidentes / incidentes.length) * 100);
+    bullets.push(`<strong>${top.nombre} ${top.apellido}</strong> concentra el mayor número de incidentes (${top.incidentes}, ${pctTop}% del total) — es el primer caso a revisar.`);
+  }
+  if (conIncidentes.length > 1) {
+    bullets.push(`En total, <strong>${conIncidentes.length}</strong> colaborador(es) distinto(s) tienen al menos un incidente registrado.`);
+  }
+
+  const masGrande = [...incidentes].sort((a, b) => b.cantidad - a.cantidad)[0];
+  if (masGrande && masGrande.cantidad >= 3) {
+    bullets.push(`El caso más marcado es <strong>${masGrande.nombre} ${masGrande.apellido}</strong> el ${masGrande.fecha} a las ${masGrande.horaVentana}, con <strong>${masGrande.cantidad}</strong> aperturas en apenas ${masGrande.rangoMinutos} minutos — patrón típico de dejar pasar a varias personas seguidas.`);
+  }
+
+  const dispositivos = new Map();
+  incidentes.forEach((i) => i.dispositivos.forEach((d) => dispositivos.set(d, (dispositivos.get(d) || 0) + 1)));
+  const topDisp = [...dispositivos.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (topDisp && dispositivos.size > 0) {
+    bullets.push(`El dispositivo con más incidentes asociados es <strong>${topDisp[0]}</strong> (${topDisp[1]} incidentes).`);
+  }
+
+  const porHora = new Map();
+  incidentes.forEach((i) => porHora.set(i.horaVentana, (porHora.get(i.horaVentana) || 0) + 1));
+  const topHora = [...porHora.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (topHora) {
+    bullets.push(`La hora con más incidentes es la ventana de las <strong>${topHora[0]}</strong> (${topHora[1]} incidentes) — vale la pena revisar qué ocurre en ese horario (entrada de clase, cambio de turno, etc.).`);
+  }
+
+  $('listaInsights').innerHTML = bullets.map((b) => `<li>${b}</li>`).join('');
+}
+
+// ---------- exportar a Excel ----------
+function exportarExcel(eventos, incidentes, resumen) {
+  const wb = XLSX.utils.book_new();
+
+  const wsEventos = XLSX.utils.json_to_sheet(eventos.map((e) => ({
+    Tiempo: e.tiempo, ID: e.id, Nombre: e.nombre, Apellido: e.apellido, Departamento: e.departamento,
+    'Sede/Área': e.area, Dispositivo: e.dispositivo, Lector: e.lector, Puerta: e.puerta,
+    'Modo verificación': e.modoVerificacion, 'Tipo evento': e.tipoEvento, 'Nivel evento': e.nivelEvento,
+    'Hora redondeada': e.horaRedondeada, 'Dentro ventana ±10min': e.dentroVentana ? 'Sí' : 'No',
+  })));
+  XLSX.utils.book_append_sheet(wb, wsEventos, 'Eventos');
+
+  const wsIncidentes = XLSX.utils.json_to_sheet(incidentes.map((i) => ({
+    ID: i.id, Nombre: i.nombre, Apellido: i.apellido, 'Sede/Área': i.area, Fecha: i.fecha,
+    'Ventana horaria': i.horaVentana, Cantidad: i.cantidad, 'Rango (min)': i.rangoMinutos,
+    Dispositivos: i.dispositivos.join(', '),
+  })));
+  XLSX.utils.book_append_sheet(wb, wsIncidentes, 'Incidentes');
+
+  const wsResumen = XLSX.utils.json_to_sheet(resumen.map((c) => ({
+    ID: c.id, Nombre: c.nombre, Apellido: c.apellido, Incidentes: c.incidentes,
+  })));
+  XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen_Colaborador');
+
+  const fecha = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `analisis_accesos_${fecha}.xlsx`);
+}
 function renderKPIs(eventos, incidentes, resumen) {
   $('kpiTotal').textContent = eventos.length.toLocaleString('es-MX');
   $('kpiVentana').textContent = eventos.filter((e) => e.dentroVentana).length.toLocaleString('es-MX');
@@ -569,6 +655,9 @@ function renderTodo() {
   renderHeatmap(filtrados, resumen);
   renderBarraSimple('area', 'chartArea', contarPor(filtrados, 'area'), '#0ea5e9');
   renderBarraSimple('tipoEvento', 'chartTipoEvento', contarPor(filtrados, 'tipoEvento'), '#8b5cf6');
+  generarInsights(filtrados, incidentes, resumen);
+
+  $('btnExportar').onclick = () => exportarExcel(filtrados, incidentes, resumen);
 }
 
 // ---------- tabs ----------
@@ -614,6 +703,7 @@ async function actualizar() {
     eventosRaw = data.eventos;
     $('vacio').classList.add('hidden');
     $('contenido').classList.remove('hidden');
+    $('btnExportar').classList.remove('hidden');
 
     poblarFiltrosRefinar(eventosRaw);
     renderTodo();
