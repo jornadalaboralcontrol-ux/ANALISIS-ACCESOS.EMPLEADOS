@@ -1,28 +1,36 @@
 // netlify/functions/analisis-accesos.js
 //
-// Consulta la API de ZKBio CVSecurity (endpoint api/v2/transaction/list),
-// filtra por los ID de colaboradores configurados en config/colaboradores.json,
-// y aplica la misma lógica del análisis en Excel:
-//   - redondea cada acceso a la hora más cercana
-//   - marca si cae dentro de la ventana ±10 min
-//   - agrupa por (colaborador, fecha, hora) y marca "incidente" cuando hay 2+ accesos
+// Consulta la API de ZKBio CVSecurity (endpoint api/v2/transaction/list) para
+// un rango de fechas, se queda solo con los eventos de COLABORADORES (pin de
+// 6 dígitos que empieza con "90" — el patrón usado en esta operación:
+// ID real de 4 dígitos + prefijo "90"), y regresa TODOS los campos del
+// módulo de accesos para que el dashboard pueda filtrar por sede, dispositivo,
+// lector, modo de verificación, tipo/nivel de evento, departamento e ID.
+//
+// El cálculo de ventana ±10min e incidentes se hace en el navegador (frontend)
+// sobre el set de eventos ya filtrado, para que los filtros sean instantáneos
+// sin volver a llamar a ZKBio en cada cambio.
 //
 // Variables de entorno requeridas (configúralas en Netlify, nunca en el código):
 //   ZKBIO_BASE_URL   ej. http://accesosalcaldia.ddns.net:8098
 //   ZKBIO_API_TOKEN  el valor de "access_token" (tu CLAVE API)
-//
-// Uso: GET /.netlify/functions/analisis-accesos?startDate=2026-07-01 00:00:00&endDate=2026-08-04 23:59:59
-
-const colaboradores = require('../../config/colaboradores.json');
 
 const PAGE_SIZE = 1000;
-const VENTANA_MIN = 10;
+const MAX_PAGES = 200; // límite de seguridad: 200,000 eventos por corrida
+
+// Regla de negocio: un pin es de colaborador si son 6 dígitos y empieza con "90"
+// (el ID real de 4 dígitos antecedido por "90"). Ajusta aquí si la regla cambia.
+const PIN_COLABORADOR_REGEX = /^90\d{4}$/;
+
+function isColaborador(pin) {
+  return PIN_COLABORADOR_REGEX.test(String(pin || '').trim());
+}
 
 function pad(n) { return String(n).padStart(2, '0'); }
 
 function defaultRange() {
   const end = new Date();
-  const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000); // últimos 30 días
+  const start = new Date(end.getTime() - 3 * 24 * 60 * 60 * 1000); // últimos 3 días (evita timeouts)
   const fmt = (d) =>
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   return { startDate: fmt(start), endDate: fmt(end) };
@@ -31,10 +39,19 @@ function defaultRange() {
 async function fetchAllTransactions(baseUrl, token, startDate, endDate) {
   const all = [];
   let pageNo = 1;
-  // seguridad: nunca más de 200 páginas (200,000 registros) por corrida
-  const MAX_PAGES = 200;
+  const inicio = Date.now();
+  // margen de seguridad: Netlify corta la función sola a los ~10s (plan gratis).
+  // Nos detenemos antes, con un mensaje claro, en vez de dejar que Netlify la mate sin explicación.
+  const LIMITE_MS = 8000;
 
   while (pageNo <= MAX_PAGES) {
+    if (Date.now() - inicio > LIMITE_MS) {
+      throw new Error(
+        `Se acabó el tiempo consultando ZKBio (página ${pageNo}, ${all.length} eventos traídos). ` +
+        `El rango de fechas es muy grande para una sola corrida — prueba con un rango más corto (1-3 días).`
+      );
+    }
+
     const url = new URL('/api/v2/transaction/list', baseUrl);
     url.searchParams.set('startDate', startDate);
     url.searchParams.set('endDate', endDate);
@@ -42,7 +59,21 @@ async function fetchAllTransactions(baseUrl, token, startDate, endDate) {
     url.searchParams.set('pageSize', String(PAGE_SIZE));
     url.searchParams.set('access_token', token);
 
-    const res = await fetch(url.toString());
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    let res;
+    try {
+      res = await fetch(url.toString(), { signal: controller.signal });
+    } catch (e) {
+      throw new Error(
+        e.name === 'AbortError'
+          ? `ZKBio no respondió a tiempo en la página ${pageNo} (¿el servidor está accesible desde internet en ese puerto?)`
+          : `No se pudo conectar a ZKBio: ${e.message}`
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
     if (!res.ok) {
       throw new Error(`ZKBio respondió ${res.status} en la página ${pageNo}`);
     }
@@ -60,128 +91,46 @@ async function fetchAllTransactions(baseUrl, token, startDate, endDate) {
   return all;
 }
 
-function parseEventTime(s) {
-  // formato esperado: "yyyy-MM-dd HH:mm:ss"
-  const [datePart, timePart] = s.split(' ');
+function roundedHourISO(eventTime) {
+  const [datePart, timePart] = eventTime.split(' ');
   const [y, m, d] = datePart.split('-').map(Number);
   const [hh, mm, ss] = timePart.split(':').map(Number);
-  return new Date(y, m - 1, d, hh, mm, ss);
-}
-
-function roundedHour(dt) {
-  const d = new Date(dt);
-  if (d.getMinutes() >= 30) {
-    d.setHours(d.getHours() + 1);
-  }
-  d.setMinutes(0, 0, 0);
-  return d;
-}
-
-function analizar(transactions, colaboradorSet) {
-  const eventos = transactions
-    .filter((t) => colaboradorSet.has(String(t.pin)))
-    .map((t) => {
-      const tiempo = parseEventTime(t.eventTime);
-      const rh = roundedHour(tiempo);
-      const diffMin = (tiempo.getTime() - rh.getTime()) / 60000;
-      const dentroVentana = Math.abs(diffMin) <= VENTANA_MIN;
-      return {
-        id: String(t.pin),
-        nombre: t.name || '',
-        apellido: t.lastName || '',
-        departamento: t.deptName || '',
-        dispositivo: t.devName || '',
-        lector: t.readerName || '',
-        tiempo: t.eventTime,
-        horaRedondeada: rh,
-        diffMin: Math.round(diffMin * 10) / 10,
-        dentroVentana,
-        horaNumero: rh.getHours(),
-        fecha: t.eventTime.split(' ')[0],
-      };
-    });
-
-  // agrupar por colaborador+fecha+horaRedondeada
-  const grupos = new Map();
-  for (const ev of eventos) {
-    if (!ev.dentroVentana) continue;
-    const key = `${ev.id}|${ev.fecha}|${ev.horaRedondeada.toISOString()}`;
-    if (!grupos.has(key)) grupos.set(key, []);
-    grupos.get(key).push(ev);
-  }
-
-  // detalle de incidentes (2+ en la misma ventana)
-  const incidentes = [];
-  for (const [, lista] of grupos) {
-    if (lista.length < 2) continue;
-    const ordenada = [...lista].sort((a, b) => a.tiempo.localeCompare(b.tiempo));
-    const primero = parseEventTime(ordenada[0].tiempo);
-    const ultimo = parseEventTime(ordenada[ordenada.length - 1].tiempo);
-    incidentes.push({
-      id: ordenada[0].id,
-      nombre: ordenada[0].nombre,
-      apellido: ordenada[0].apellido,
-      departamento: ordenada[0].departamento,
-      fecha: ordenada[0].fecha,
-      horaVentana: `${pad(ordenada[0].horaRedondeada.getHours())}:00`,
-      cantidad: ordenada.length,
-      horarios: ordenada.map((e) => e.tiempo.split(' ')[1]),
-      rangoMinutos: Math.round(((ultimo - primero) / 60000) * 10) / 10,
-      dispositivos: [...new Set(ordenada.map((e) => e.dispositivo))],
-    });
-  }
-  incidentes.sort((a, b) => b.cantidad - a.cantidad);
-
-  // resumen por colaborador
-  const porColaborador = new Map();
-  for (const ev of eventos) {
-    if (!porColaborador.has(ev.id)) {
-      porColaborador.set(ev.id, {
-        id: ev.id,
-        nombre: ev.nombre,
-        apellido: ev.apellido,
-        departamento: ev.departamento,
-        total: 0,
-        enVentana: 0,
-        horas: {},
-      });
-    }
-    const c = porColaborador.get(ev.id);
-    c.total += 1;
-    if (ev.dentroVentana) {
-      c.enVentana += 1;
-      c.horas[ev.horaNumero] = (c.horas[ev.horaNumero] || 0) + 1;
-    }
-  }
-  for (const inc of incidentes) {
-    const c = porColaborador.get(inc.id);
-    if (c) {
-      c.incidentes = (c.incidentes || 0) + 1;
-      c.maxEnVentana = Math.max(c.maxEnVentana || 0, inc.cantidad);
-    }
-  }
-  const resumenColaborador = [...porColaborador.values()]
-    .map((c) => ({ ...c, incidentes: c.incidentes || 0, maxEnVentana: c.maxEnVentana || 0 }))
-    .sort((a, b) => (b.incidentes - a.incidentes) || (b.maxEnVentana - a.maxEnVentana));
-
-  // matriz colaborador x hora
-  const horasUsadas = [...new Set(eventos.filter((e) => e.dentroVentana).map((e) => e.horaNumero))].sort(
-    (a, b) => a - b
-  );
-  const matrizHora = resumenColaborador.map((c) => ({
-    id: c.id,
-    nombre: c.nombre,
-    apellido: c.apellido,
-    valores: horasUsadas.map((h) => c.horas[h] || 0),
-  }));
-
+  const dt = new Date(y, m - 1, d, hh, mm, ss);
+  if (dt.getMinutes() >= 30) dt.setHours(dt.getHours() + 1);
+  dt.setMinutes(0, 0, 0);
+  const diffMin = Math.round((new Date(y, m - 1, d, hh, mm, ss) - dt) / 6000) / 10;
   return {
-    totalEventosColaboradores: eventos.length,
-    totalEnVentana: eventos.filter((e) => e.dentroVentana).length,
-    totalIncidentes: incidentes.length,
-    resumenColaborador,
-    incidentes,
-    matrizHora: { horas: horasUsadas, filas: matrizHora },
+    horaRedondeada: `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:00`,
+    horaNumero: dt.getHours(),
+    diffMin,
+    dentroVentana: Math.abs(diffMin) <= 10,
+  };
+}
+
+function normalizar(t) {
+  const { horaRedondeada, horaNumero, diffMin, dentroVentana } = roundedHourISO(t.eventTime);
+  return {
+    id: String(t.pin || ''),
+    nombre: t.name || '',
+    apellido: t.lastName || '',
+    departamento: t.deptName || '',
+    area: t.areaName || '',
+    tarjeta: t.cardNo || '',
+    dispositivo: t.devName || '',
+    devSn: t.devSn || '',
+    lector: t.readerName || '',
+    puntoEvento: t.eventPointName || '',
+    puerta: t.doorName || '',
+    modoVerificacion: t.verifyModeName || '',
+    tipoEvento: t.eventName || '',
+    eventNo: t.eventNo,
+    nivelEvento: t.eventLevel === 0 || t.eventLevel === '0' ? 'Normal' : (t.eventLevel === 1 || t.eventLevel === '1' ? 'Excepción' : 'Alarma'),
+    tiempo: t.eventTime,
+    fecha: t.eventTime.split(' ')[0],
+    horaRedondeada,
+    horaNumero,
+    diffMin,
+    dentroVentana,
   };
 }
 
@@ -199,7 +148,7 @@ exports.handler = async (event) => {
         statusCode: 500,
         headers,
         body: JSON.stringify({
-          error: 'Faltan variables de entorno ZKBIO_BASE_URL o ZKBIO_API_TOKEN. Configúralas en Netlify (Site settings > Environment variables).',
+          error: 'Faltan variables de entorno ZKBIO_BASE_URL o ZKBIO_API_TOKEN. Configúralas en Netlify (Site settings > Environment variables) y vuelve a desplegar (Trigger deploy > Clear cache and deploy site).',
         }),
       };
     }
@@ -207,9 +156,10 @@ exports.handler = async (event) => {
     const qs = event.queryStringParameters || {};
     const { startDate, endDate } = qs.startDate && qs.endDate ? qs : defaultRange();
 
-    const colaboradorSet = new Set(colaboradores);
     const transactions = await fetchAllTransactions(baseUrl, token, startDate, endDate);
-    const resultado = analizar(transactions, colaboradorSet);
+    const eventos = transactions
+      .filter((t) => isColaborador(t.pin))
+      .map(normalizar);
 
     return {
       statusCode: 200,
@@ -219,10 +169,10 @@ exports.handler = async (event) => {
           startDate,
           endDate,
           totalEventosConsultados: transactions.length,
-          totalColaboradores: colaboradores.length,
+          totalEventosColaboradores: eventos.length,
           generadoEn: new Date().toISOString(),
         },
-        ...resultado,
+        eventos,
       }),
     };
   } catch (err) {
