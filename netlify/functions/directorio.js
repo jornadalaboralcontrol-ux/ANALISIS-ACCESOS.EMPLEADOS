@@ -61,7 +61,7 @@ async function unaPagina(baseUrl, token, pageNo, variante) {
     throw new Error(`respuesta no-JSON (status ${res.status}): ${raw.slice(0, 150)}`);
   }
   if (!res.ok || json.code !== 0 || !json.data) {
-    throw new Error(`formato inesperado (status ${res.status}, code ${json.code}, message ${json.message || 'n/a'})`);
+    throw new Error(`formato inesperado (status ${res.status}): ${raw.slice(0, 400)}`);
   }
   return json.data;
 }
