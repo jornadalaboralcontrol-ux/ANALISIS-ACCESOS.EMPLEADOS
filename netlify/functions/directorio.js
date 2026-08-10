@@ -18,6 +18,18 @@
 
 const PAGE_SIZE = 1000;
 const PIN_COLABORADOR_REGEX = /^90\d{4}$/;
+
+// Lista fija de las 18 sedes reales (tomada del árbol de departamentos de
+// ZKBio). Se usa como respaldo para que el filtro de Departamento/Sede
+// siempre muestre las 18, aunque el directorio derivado de accesos recientes
+// no haya visto actividad de alguna de ellas todavía. Si algún nombre no
+// coincide exactamente con el real, edítalo aquí.
+const SEDES_CONOCIDAS = [
+  'Alberca Olimpica', 'Gimnasio BJ', 'Joaquin Capilla', 'Vicente Saldivar',
+  'Plan Sexenal', 'Nueva Argentina', 'Acopilco', 'Chimalpa', 'Cuauhximalpa',
+  'Huizachito', 'San Mateo', 'Tinajas', 'Cuauhtemoc', 'Guelatao',
+  'Antonio Caso', 'Bicentenario', 'Cinco De Mayo', 'Deportivo Morelos',
+];
 const DIAS_FALLBACK = 120;
 
 function isColaborador(pin) {
@@ -167,6 +179,7 @@ exports.handler = async () => {
         colaboradores,
         total: colaboradores.length,
         fuente,
+        sedesConocidas: SEDES_CONOCIDAS,
         nota: fuente === 'derivado'
           ? `Derivado de accesos de los últimos ${DIAS_FALLBACK} días — puede no incluir sedes/colaboradores sin accesos en ese periodo. (${detalle})`
           : detalle,
