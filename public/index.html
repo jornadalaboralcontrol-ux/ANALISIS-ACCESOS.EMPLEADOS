@@ -341,7 +341,8 @@ async function cargarDirectorio() {
     try { data = JSON.parse(raw); } catch { throw new Error(`Respuesta no-JSON (status ${res.status}): ${raw.slice(0, 200)}`); }
     if (!res.ok) throw new Error(data.error || data.errorMessage || `Error HTTP ${res.status}`);
     directorio = data.colaboradores;
-    msDepto.setOptions(uniq(directorio.map((c) => c.departamento)));
+    const sedesFusionadas = fusionarSedes(data.sedesConocidas || [], directorio.map((c) => c.departamento));
+    msDepto.setOptions(sedesFusionadas);
     if (data.nota) {
       $('estadoDirectorio').textContent = `${directorio.length} colaboradores — ${data.fuente === 'derivado' ? 'derivado de accesos recientes' : data.fuente}`;
       textoDiagnostico = `Directorio (${data.fuente}): ${data.nota}`;
@@ -437,11 +438,22 @@ $('btnLimpiarBusqueda').addEventListener('click', () => {
 // ---------- utilidades ----------
 function uniq(arr) { return [...new Set(arr.filter((v) => v !== '' && v != null))].sort(); }
 
+function normalizarTexto(s) {
+  return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+}
+
+function fusionarSedes(estaticas, derivadas) {
+  const porClave = new Map();
+  derivadas.forEach((d) => { if (d) porClave.set(normalizarTexto(d), d); });
+  estaticas.forEach((e) => { const k = normalizarTexto(e); if (!porClave.has(k)) porClave.set(k, e); });
+  return [...porClave.values()].sort();
+}
+
 function resolverPines() {
   const idsDirectos = colaboradoresElegidos.map((c) => c.id);
-  const deptosElegidos = msDepto.getSelected();
+  const deptosElegidos = msDepto.getSelected().map(normalizarTexto);
   const idsPorDepto = deptosElegidos.length
-    ? directorio.filter((c) => deptosElegidos.includes(c.departamento)).map((c) => c.id)
+    ? directorio.filter((c) => deptosElegidos.includes(normalizarTexto(c.departamento))).map((c) => c.id)
     : [];
   return uniq([...idsDirectos, ...idsPorDepto]);
 }
