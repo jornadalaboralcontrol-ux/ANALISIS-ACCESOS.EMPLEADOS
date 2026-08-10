@@ -45,7 +45,8 @@
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
     <div class="flex items-center justify-between mb-3">
       <h2 class="font-bold text-slate-800 text-sm">Búsqueda</h2>
-      <span id="estadoDirectorio" class="text-xs text-slate-400">Cargando directorio de colaboradores…</span>
+      <span id="estadoDirectorio" class="text-xs text-slate-400"></span>
+      <button id="btnCopiarDiag" class="hidden text-xs text-blue-600 hover:underline ml-2">Copiar diagnóstico</button>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
@@ -230,77 +231,91 @@ function crearMultiSelect(containerId, etiqueta) {
   let seleccion = new Set();
   let onChangeCb = () => {};
 
-  function render() {
-    const seleccionadas = opciones.filter((o) => seleccion.has(o));
-    cont.innerHTML = `
-      <button type="button" class="ms-btn">
-        <span>${etiqueta}</span>
-        ${seleccionadas.length ? `<span class="ms-badge">${seleccionadas.length}</span>` : ''}
-      </button>
-      <div class="ms-panel hidden">
-        <input type="text" placeholder="Buscar…" />
-        <div class="ms-options"></div>
-        <div class="ms-actions">
-          <button type="button" data-accion="todo">Todo</button>
-          <button type="button" data-accion="ninguno">Ninguno</button>
-        </div>
-      </div>`;
-    const btn = cont.querySelector('.ms-btn');
-    const panel = cont.querySelector('.ms-panel');
-    const search = cont.querySelector('input');
-    const optsDiv = cont.querySelector('.ms-options');
+  cont.innerHTML = `
+    <button type="button" class="ms-btn">
+      <span>${etiqueta}</span>
+      <span class="ms-badge hidden"></span>
+    </button>
+    <div class="ms-panel hidden">
+      <input type="text" placeholder="Buscar…" />
+      <div class="ms-options"></div>
+      <div class="ms-actions">
+        <button type="button" data-accion="todo">Todo</button>
+        <button type="button" data-accion="ninguno">Ninguno</button>
+      </div>
+    </div>`;
+  const btn = cont.querySelector('.ms-btn');
+  const badge = cont.querySelector('.ms-badge');
+  const panel = cont.querySelector('.ms-panel');
+  const search = cont.querySelector('input[type=text]');
+  const optsDiv = cont.querySelector('.ms-options');
 
-    function renderOpciones(filtro = '') {
-      const f = filtro.toLowerCase();
-      optsDiv.innerHTML = opciones
-        .filter((o) => o.toLowerCase().includes(f))
-        .map((o) => `<label class="ms-option"><input type="checkbox" value="${o.replace(/"/g, '&quot;')}" ${seleccion.has(o) ? 'checked' : ''}/> <span>${o}</span></label>`)
-        .join('') || '<div class="text-slate-400 text-xs px-1 py-2">Sin opciones</div>';
-      optsDiv.querySelectorAll('input[type=checkbox]').forEach((cb) => {
-        cb.addEventListener('change', () => {
-          if (cb.checked) seleccion.add(cb.value); else seleccion.delete(cb.value);
-          onChangeCb([...seleccion]);
-          render();
-          openPanel();
-          search.focus();
-        });
-      });
-    }
-
-    function openPanel() {
-      panel.classList.remove('hidden');
-      renderOpciones(search.value);
-    }
-
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const abierto = !panel.classList.contains('hidden');
-      document.querySelectorAll('.ms-panel').forEach((p) => p.classList.add('hidden'));
-      if (!abierto) openPanel();
-    });
-    search.addEventListener('input', () => renderOpciones(search.value));
-    search.addEventListener('click', (e) => e.stopPropagation());
-    cont.querySelector('[data-accion="todo"]').addEventListener('click', () => {
-      opciones.forEach((o) => seleccion.add(o));
-      onChangeCb([...seleccion]); render(); openPanel();
-    });
-    cont.querySelector('[data-accion="ninguno"]').addEventListener('click', () => {
-      seleccion.clear();
-      onChangeCb([...seleccion]); render(); openPanel();
-    });
+  function actualizarBadge() {
+    if (seleccion.size > 0) { badge.textContent = seleccion.size; badge.classList.remove('hidden'); }
+    else { badge.classList.add('hidden'); }
   }
 
-  document.addEventListener('click', () => {
-    const panel = cont.querySelector('.ms-panel');
-    if (panel) panel.classList.add('hidden');
+  function renderOpciones(filtro = '') {
+    const f = filtro.toLowerCase();
+    optsDiv.innerHTML = opciones
+      .map((o, i) => ({ o, i }))
+      .filter(({ o }) => o.toLowerCase().includes(f))
+      .map(({ o, i }) => `<label class="ms-option"><input type="checkbox" data-idx="${i}" ${seleccion.has(o) ? 'checked' : ''}/> <span>${o}</span></label>`)
+      .join('') || '<div class="text-slate-400 text-xs px-1 py-2">Sin opciones</div>';
+  }
+
+  // Delegación de eventos: NO se reconstruye el panel al marcar una casilla,
+  // así no se cierra solo ni se pierde el estado del resto de las casillas.
+  optsDiv.addEventListener('change', (e) => {
+    const cb = e.target;
+    if (!cb.matches('input[type=checkbox]')) return;
+    const valor = opciones[Number(cb.dataset.idx)];
+    if (cb.checked) seleccion.add(valor); else seleccion.delete(valor);
+    actualizarBadge();
+    onChangeCb([...seleccion]);
   });
 
-  render();
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const abierto = !panel.classList.contains('hidden');
+    document.querySelectorAll('.ms-panel').forEach((p) => p.classList.add('hidden'));
+    if (!abierto) {
+      panel.classList.remove('hidden');
+      renderOpciones(search.value);
+      search.focus();
+    }
+  });
+  panel.addEventListener('click', (e) => e.stopPropagation());
+  search.addEventListener('input', () => renderOpciones(search.value));
+  cont.querySelector('[data-accion="todo"]').addEventListener('click', () => {
+    opciones.forEach((o) => seleccion.add(o));
+    actualizarBadge();
+    renderOpciones(search.value);
+    onChangeCb([...seleccion]);
+  });
+  cont.querySelector('[data-accion="ninguno"]').addEventListener('click', () => {
+    seleccion.clear();
+    actualizarBadge();
+    renderOpciones(search.value);
+    onChangeCb([...seleccion]);
+  });
+
+  document.addEventListener('click', () => panel.classList.add('hidden'));
 
   return {
-    setOptions(nuevas) { opciones = nuevas; seleccion = new Set([...seleccion].filter((s) => opciones.includes(s))); render(); },
+    setOptions(nuevas) {
+      opciones = nuevas;
+      seleccion = new Set([...seleccion].filter((s) => opciones.includes(s)));
+      actualizarBadge();
+      renderOpciones(search.value);
+    },
     getSelected() { return [...seleccion]; },
-    clear() { seleccion.clear(); render(); onChangeCb([]); },
+    clear() {
+      seleccion.clear();
+      actualizarBadge();
+      renderOpciones(search.value);
+      onChangeCb([]);
+    },
     onChange(cb) { onChangeCb = cb; },
   };
 }
@@ -317,6 +332,8 @@ const msNivel = crearMultiSelect('msNivel', 'Nivel de evento');
 
 // ---------- directorio ----------
 async function cargarDirectorio() {
+  $('estadoDirectorio').textContent = 'Cargando directorio de colaboradores…';
+  let textoDiagnostico = '';
   try {
     const res = await fetch(API_DIRECTORIO);
     const raw = await res.text();
@@ -325,12 +342,25 @@ async function cargarDirectorio() {
     if (!res.ok) throw new Error(data.error || data.errorMessage || `Error HTTP ${res.status}`);
     directorio = data.colaboradores;
     msDepto.setOptions(uniq(directorio.map((c) => c.departamento)));
-    $('estadoDirectorio').textContent = data.nota
-      ? `${directorio.length} colaboradores — ${data.nota}`
-      : `${directorio.length} colaboradores en el directorio`;
+    if (data.nota) {
+      $('estadoDirectorio').textContent = `${directorio.length} colaboradores — ${data.fuente === 'derivado' ? 'derivado de accesos recientes' : data.fuente}`;
+      textoDiagnostico = `Directorio (${data.fuente}): ${data.nota}`;
+    } else {
+      $('estadoDirectorio').textContent = `${directorio.length} colaboradores en el directorio (fuente: ${data.fuente})`;
+    }
   } catch (err) {
-    $('estadoDirectorio').textContent = `Directorio no disponible (${err.message}) — puedes escribir el ID directamente`;
-    console.error('Error cargando directorio:', err);
+    $('estadoDirectorio').textContent = `Directorio no disponible — puedes escribir el ID directamente`;
+    textoDiagnostico = `Error cargando directorio: ${err.message}`;
+    console.error(textoDiagnostico);
+  }
+  if (textoDiagnostico) {
+    $('btnCopiarDiag').classList.remove('hidden');
+    $('btnCopiarDiag').onclick = () => {
+      navigator.clipboard.writeText(textoDiagnostico).then(() => {
+        $('btnCopiarDiag').textContent = '¡Copiado!';
+        setTimeout(() => { $('btnCopiarDiag').textContent = 'Copiar diagnóstico'; }, 2000);
+      });
+    };
   }
 }
 cargarDirectorio();
@@ -536,6 +566,16 @@ function generarInsights(eventos, incidentes, resumen) {
   $('listaInsights').innerHTML = bullets.map((b) => `<li>${b}</li>`).join('');
 }
 
+function colLetra(n) {
+  let s = '';
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
 // ---------- exportar a Excel (misma estructura que el análisis original) ----------
 async function exportarExcel(eventos, incidentes, resumen) {
   const wb = new ExcelJS.Workbook();
@@ -658,6 +698,21 @@ async function exportarExcel(eventos, incidentes, resumen) {
   });
   ws3.columns.forEach((col, i) => { col.width = [10, 18, 18][i] || 8; });
   ws3.views = [{ state: 'frozen', xSplit: 3, ySplit: 3, showGridLines: false }];
+
+  const primeraFilaDatos = 4;
+  const ultimaFilaDatos = 3 + resumen.length;
+  if (horasUsadas.length > 0 && resumen.length > 0) {
+    const colInicio = colLetra(4);
+    const colFin = colLetra(3 + horasUsadas.length);
+    ws3.addConditionalFormatting({
+      ref: `${colInicio}${primeraFilaDatos}:${colFin}${ultimaFilaDatos}`,
+      rules: [{
+        type: 'colorScale',
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        color: [{ argb: 'FFFFFFFF' }, { argb: 'FF1F4E5F' }],
+      }],
+    });
+  }
 
   // ---- Eventos_Filtrados ----
   const ws4 = wb.addWorksheet('Eventos_Filtrados');
